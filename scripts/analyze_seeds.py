@@ -20,6 +20,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 CELL_DESC = {
     "base": "42x42x42 (기준)",
+    "elong15": "63x42x42 (길쭉)",
+    "elong20": "84x42x42 (더 길쭉)",
     "wide12": "42x63x42 (닫힘축 넓음)",
     "wide16": "42x84x42 (한계 초과)",
     "small": "26x26x26 (작음)",
@@ -40,10 +42,14 @@ def sd(xs):
 
 
 def main():
-    # eval/gs_<cell>_seed<N>.csv 를 모은다.
+    # eval/gridseed_<cell>_rl_s<N>.csv 를 모은다.
+    # (run_grid_seeds.sh 가 쓰는 이름. 예전 gs_*_seed*.csv 규약도 함께 받는다)
     found = defaultdict(dict)  # cell -> seed -> rates
-    for p in sorted(glob.glob(str(ROOT / "eval" / "gs_*_seed*.csv"))):
-        m = re.match(r"gs_(.+)_seed(\d+)\.csv", Path(p).name)
+    patterns = ["gridseed_*_rl_s*.csv", "gs_*_seed*.csv"]
+    files = sorted({f for pat in patterns for f in glob.glob(str(ROOT / "eval" / pat))})
+    for p in files:
+        m = (re.match(r"gridseed_(.+)_rl_s(\d+)\.csv", Path(p).name)
+             or re.match(r"gs_(.+)_seed(\d+)\.csv", Path(p).name))
         if not m:
             continue
         cell, seed = m.group(1), int(m.group(2))
@@ -52,7 +58,7 @@ def main():
             found[cell][seed] = r
 
     if not found:
-        print("eval/gs_*_seed*.csv 가 없다 — scripts/run_grid_seeds.sh 를 먼저 돌려라.")
+        print("eval/gridseed_*_rl_s*.csv 가 없다 — scripts/run_grid_seeds.sh 를 먼저 돌려라.")
         return
 
     out_rows = []
