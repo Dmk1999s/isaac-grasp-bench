@@ -13,6 +13,7 @@
 #   '기울기가 있는가'를 먼저 본다. 필요하면 중간 강도를 나중에 채운다.
 set -u
 cd "$(dirname "$0")/.."
+. scripts/env.sh   # EULA·PY 등 실행 환경 고정
 ITERS=${ITERS:-1500}
 ENVS=${ENVS:-4096}
 STRENGTHS=${STRENGTHS:-"000 050 100"}
@@ -29,7 +30,7 @@ for ST in $STRENGTHS; do
       sleep 5
     fi
     echo "[dr$ST|seed$S] 학습 시작 $(date +%H:%M)"
-    python -u scripts/train_rl.py --task "$TASK" --headless \
+    "$PY" -u scripts/train_rl.py --task "$TASK" --headless \
       --num_envs "$ENVS" --max_iterations "$ITERS" --seed "$S" \
       --run_name "ppo_dr${ST}_seed$S" 2>&1 | grep -E "Mean reward:" | tail -1
     D=$(ls -td runs/rsl_rl/franka_lift/*ppo_dr${ST}_seed${S} 2>/dev/null | head -1)

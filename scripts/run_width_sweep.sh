@@ -9,6 +9,7 @@
 # 멱등하다 — 결과 CSV 가 있으면 건너뛴다.
 set -u
 cd "$(dirname "$0")/.."
+. scripts/env.sh   # EULA·PY 등 실행 환경 고정
 REPEATS=${REPEATS:-5}
 ENVS=${ENVS:-32}
 SEEDS=${SEEDS:-"1 2 3 4"}
@@ -21,7 +22,7 @@ for W in $SCALES; do
 
   OUT="eval/width_w${TAG}_pca.csv"
   if [ -f "$OUT" ]; then echo "[w$W|pca] 이미 있음"; else
-    R=$(timeout 1800 python -u scripts/run_eval.py --controller pca --headless \
+    R=$(timeout 1800 "$PY" -u scripts/run_eval.py --controller pca --headless \
         --object_scale "$SCALE" --num_envs $ENVS --repeats $REPEATS \
         --out "$OUT" 2>&1 | grep -E "^\[pca\] 성공률" | head -1)
     echo "[w$W|pca] $R"
@@ -32,7 +33,7 @@ for W in $SCALES; do
     [ -f "$OUT" ] && { echo "[w$W|seed$S] 이미 있음"; continue; }
     CKPT="checkpoints/final/policy_ikrel_seed${S}.pt"
     [ -f "$CKPT" ] || { echo "[w$W|seed$S] ERROR: 체크포인트 없음"; continue; }
-    R=$(timeout 1800 python -u scripts/run_eval.py --controller rl --headless \
+    R=$(timeout 1800 "$PY" -u scripts/run_eval.py --controller rl --headless \
         --object_scale "$SCALE" --num_envs $ENVS --repeats $REPEATS \
         --checkpoint "$CKPT" --out "$OUT" 2>&1 | grep -E "^\[rl\] 성공률" | head -1)
     echo "[w$W|seed$S] $R"

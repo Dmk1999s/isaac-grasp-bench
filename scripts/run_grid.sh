@@ -13,6 +13,7 @@
 #    기본 조건 측정의 10회 반복보다 적다. 격자 탐색용이다.
 set -u
 cd "$(dirname "$0")/.."
+. scripts/env.sh   # EULA·PY 등 실행 환경 고정
 CKPT=checkpoints/final/policy_ikrel_seed1.pt
 REPEATS=${REPEATS:-5}
 ENVS=${ENVS:-32}

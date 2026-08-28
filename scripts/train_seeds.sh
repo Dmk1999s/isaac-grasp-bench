@@ -9,6 +9,7 @@
 # 중단되어도 다시 실행하면 남은 것부터 이어서 한다.
 set -u
 cd "$(dirname "$0")/.."
+. scripts/env.sh   # EULA·PY 등 실행 환경 고정
 
 TASK=IsaacGraspBench-Lift-Cube-Franka-IK-Rel-v0
 ENVS=${ENVS:-4096}
@@ -39,7 +40,7 @@ for S in $SEEDS; do
   fi
 
   echo "[seed $S] 학습 시작 $(date +%H:%M)"
-  python -u scripts/train_rl.py --task "$TASK" --headless \
+  "$PY" -u scripts/train_rl.py --task "$TASK" --headless \
     --num_envs "$ENVS" --max_iterations "$ITERS" --seed "$S" \
     --run_name "ppo_ikrel_seed$S" 2>&1 | grep -E "Mean reward:" | tail -1
 
