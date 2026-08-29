@@ -77,9 +77,13 @@ def fig_failure_map(out, seed_glob="eval/gridseed_{label}_rl_s*.csv"):
             continue
         per_seed = np.array([rates_by_repeat(f).mean() for f in seed_files])
         labels.append(disp)
-        pca_m.append(pr.mean()); pca_e.append(pr.std(ddof=1) if len(pr) > 1 else 0.0)
+        # ⚠ 오차막대는 판정에 쓰는 척도와 같아야 한다.
+        #   compare_runs.py 의 편차는 최대-최소인데 여기서 표준편차를 그리면
+        #   "막대가 겹치면 판단 보류"라는 캡션이 그림과 어긋난다.
+        #   그래서 최소~최대를 비대칭 막대로 그린다.
+        pca_m.append(pr.mean()); pca_e.append([pr.mean()-pr.min(), pr.max()-pr.mean()])
         rl_m.append(per_seed.mean())
-        rl_e.append(per_seed.std(ddof=1) if len(per_seed) > 1 else 0.0)
+        rl_e.append([per_seed.mean()-per_seed.min(), per_seed.max()-per_seed.mean()])
 
     if not labels:
         print("실패 지도용 데이터가 아직 없다 — 건너뜀")
@@ -87,11 +91,12 @@ def fig_failure_map(out, seed_glob="eval/gridseed_{label}_rl_s*.csv"):
 
     x = np.arange(len(labels)); w = 0.38
     fig, ax = plt.subplots(figsize=(9, 4.5))
-    ax.bar(x - w/2, pca_m, w, yerr=pca_e, capsize=4, label="PCA 휴리스틱", color=C_PCA)
-    ax.bar(x + w/2, rl_m, w, yerr=rl_e, capsize=4, label=f"PPO 정책 (시드 {len(seed_files)}개)", color=C_RL)
+    ax.bar(x - w/2, pca_m, w, yerr=np.array(pca_e).T, capsize=4, label="PCA 휴리스틱", color=C_PCA)
+    ax.bar(x + w/2, rl_m, w, yerr=np.array(rl_e).T, capsize=4,
+           label=f"PPO 정책 (시드 {len(seed_files)}개)", color=C_RL)
     ax.set_xticks(x); ax.set_xticklabels(labels, fontsize=9)
     ax.set_ylabel("성공률 (%)"); ax.set_ylim(0, 108)
-    ax.set_title("물체 격자 실패 지도 — 오차막대는 반복/시드 편차")
+    ax.set_title("물체 격자 실패 지도 — 오차막대는 최소~최대 (판정과 같은 척도)")
     ax.legend(); ax.grid(axis="y", alpha=0.25)
     fig.tight_layout(); fig.savefig(out, dpi=150)
     print(f"생성: {out}")

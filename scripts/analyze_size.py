@@ -17,6 +17,7 @@ Isaac Sim 없이 돈다 (CSV 만 읽는다).
 """
 import argparse
 import csv
+import glob
 import pathlib
 
 import numpy as np
@@ -24,7 +25,19 @@ import numpy as np
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 BASE_CUBE_MM = 52.5
 SCALES = ["0.35", "0.4", "0.45", "0.5", "0.55", "0.6", "0.65", "0.7", "0.8"]
-SEEDS = (1, 2, 3, 4)
+
+
+def available_seeds(ev):
+    """시드를 하드코딩하지 않는다 — 있는 만큼 쓴다.
+    시드를 늘렸을 때 스크립트를 고치는 걸 잊으면 조용히 옛 결론이 유지된다."""
+    import re
+    ss = set()
+    for f in glob.glob(str(ev / "size_s*_rl_s*.csv")):
+        m = re.search(r"_rl_s(\d+)\.csv$", f)
+        if m:
+            ss.add(int(m.group(1)))
+    return tuple(sorted(ss))
+
 CLEARANCES = [5, 10, 15, 20, 25, 30]      # 클리어런스 스윕 (26.2mm 고정)
 CLR_LOW = 10                              # B팔에 쓴 값
 
@@ -51,17 +64,18 @@ def main():
     ap.add_argument("--out", default="docs/size_sweep.md")
     args = ap.parse_args()
     ev = ROOT / "eval"
+    SEEDS = available_seeds(ev)
     out = []
 
     out += ["# 크기 축 실패 지도 — 상수의 영향을 분리한다", "",
             "같은 태스크·같은 액션 인터페이스(IK-Rel)·같은 성공 기준.",
-            "크기당 PCA 2회 + RL 시드 4개 = 6회, 회당 5반복 x 32 env = 160 에피소드.", "",
+            f"크기당 PCA 2회 + RL 시드 {len(SEEDS)}개, 회당 5반복 x 32 env = 160 에피소드.", "",
             "PCA 를 두 조건에서 잰다 — `floor_clearance_mm` 이 작은 물체에서 결과를",
             "통째로 만들기 때문이다. 한 조건만 재면 '제어 방식'이 아니라 '내가 고른 상수'를",
             "재게 된다(원칙 1).", ""]
 
-    hdr = ("| 크기 (mm) | PCA `clr=30` | PCA `clr=%d` | RL (시드 4개) | 차이 | 노이즈 | 판정 |"
-           % CLR_LOW)
+    hdr = ("| 크기 (mm) | PCA `clr=30` | PCA `clr=%d` | RL (시드 %d개) | 차이 | 노이즈 | 판정 |"
+           % (CLR_LOW, len(SEEDS)))
     out += [hdr, "|---|---:|---:|---:|---:|---:|---|"]
 
     rows = []
@@ -83,6 +97,33 @@ def main():
     out += ["",
             "> 노이즈는 PCA 반복 편차와 RL **시드 간** 편차 중 큰 쪽이다(최대-최소).",
             "> `compare_runs.py` 와 같은 규칙을 쓴다 — 다르게 쓰면 판정끼리 비교되지 않는다.",
+            ""]
+
+    # ── 분포 요약 ─────────────────────────────────────────────────
+    # 평균은 이 데이터에서 어느 시드도 대표하지 않는다. 18.4mm 의 시드는
+    # 0.0 / 15.6 / ... / 66.2 / 100.0% 로 갈라지는데 평균은 35.8% 다.
+    # 그래서 중앙값·범위와 '의미 있게 낮은 시드 수'를 같이 낸다.
+    #
+    # 임계값 T 는 고르지 않고 도출한다(원칙 4): 학습 분포 크기(42.0mm)에서
+    # 관측된 시드 간 범위다. 그 크기에서는 분포 밖 효과가 없으므로,
+    # 거기서 시드가 흔들리는 폭보다 크게 낮으면 분포 밖 효과로 본다.
+    base_seeds = np.array([rates_by_repeat(ev / f"size_s08_rl_s{k}.csv").mean()
+                           for k in SEEDS])
+    T = spread(base_seeds)
+
+    out += ["## 분포 요약 — 평균이 대표하지 못하는 구간", "",
+            f"임계값 T = **{T:.1f}%p**. 고른 값이 아니라 학습 분포 크기(42.0mm)에서",
+            "관측된 시드 간 범위다 — 그 크기에서는 분포 밖 효과가 없다(원칙 4).", "",
+            "| 크기 (mm) | RL 중앙값 | RL 최저 | RL 최고 | PCA 보다 T 이상 낮은 시드 |",
+            "|---|---:|---:|---:|---:|"]
+    for mm, _, b_m, per_seed, _, _, _ in rows:
+        k = int((per_seed < b_m - T).sum())
+        out.append(f"| {mm:.1f} | {np.median(per_seed):.1f}% | {per_seed.min():.1f}% "
+                   f"| {per_seed.max():.1f}% | **{k} / {len(per_seed)}** |")
+    out += ["",
+            "> 크기와 빈도를 같이 센다. 부호검정은 천장 효과에 끌려 0.6%p 차이도",
+            "> 유의에 가깝게 만들고, t분포 신뢰구간은 상한이 100% 를 넘는다",
+            "> (성공률은 0~100 에 갇힌 값이다). 둘 다 판정 규칙으로 쓰지 않는다.",
             ""]
 
     out += ["## 시드별 상세 (RL)", "",
