@@ -32,6 +32,11 @@ parser.add_argument("--along_axis_deeper_mm", type=float, default=0.0)
 parser.add_argument("--floor_clearance_mm", type=float, default=30.0)
 parser.add_argument("--grasp_offset_m", type=float, default=0.0,
                     help="대조군: 파지 자세를 일부러 어긋나게 준다 (pca 전용)")
+parser.add_argument("--object_yaw_deg", type=float, default=None,
+                    help="물체를 z축으로 이 각도만큼 돌려 놓는다(도). "
+                         "기본 태스크의 pose_range 에는 회전이 없어 물체가 항상 "
+                         "축 정렬로 놓인다 — PCA 에 가장 유리한 입력이다. "
+                         "None 이면 기존 동작(회전 없음) 그대로다.")
 parser.add_argument("--object_scale", type=str, default="0.8,0.8,0.8",
                     help="물체 스폰 스케일 sx,sy,sz. 기본값 0.8 은 Isaac Lab Lift-Cube 원래 값. "
                          "기저 DexCube 는 한 변 52.5mm 이므로 실제 치수 = 52.5 x scale [mm]. "
@@ -149,6 +154,22 @@ def run_repeat(env, policy, seed, args, nominal_mm):
     env.unwrapped.seed(seed)
     obs_dict, _ = env.reset()
 
+    # 물체 자세(yaw)를 씌운다. 기본 태스크의 reset_object_position 은
+    # pose_range 에 x/y/z 만 있어 회전이 없다 — 물체가 늘 축 정렬로 놓인다.
+    # 그 상태는 PCA 에 가장 유리한 입력이라(장축이 곧 월드 축) 실패 지도의
+    # '자세' 축이 통째로 비어 있었다.
+    #
+    # ⚠ 안착 스텝 '전에' 써야 한다. 물리가 돌면서 자리를 잡아야 뒤에서 읽는
+    #   obj.data.root_quat_w 가 실제 안착 자세와 일치한다.
+    if args.object_yaw_deg is not None:
+        obj0 = env.unwrapped.scene["object"]
+        half = np.deg2rad(args.object_yaw_deg) / 2.0
+        q = torch.tensor([np.cos(half), 0.0, 0.0, np.sin(half)],
+                         dtype=torch.float32, device=device)      # (w,x,y,z), z축 회전
+        root = obj0.data.root_state_w.clone()
+        root[:, 3:7] = q
+        obj0.write_root_state_to_sim(root)
+
     # 안착: 델타 0 을 명령해 팔을 가만히 둔다 (IK-Rel 이라 0 이 곧 정지다)
     hold = torch.zeros((n, adim), device=device)
     hold[:, -1] = 1.0
@@ -164,6 +185,20 @@ def run_repeat(env, policy, seed, args, nominal_mm):
     z_rest = obj_pos[:, 2]
     # 치수는 설정한 스케일에서 계산하고, 높이는 안착 높이로 교차검증한다.
     # (USD 바운딩박스는 실제 충돌 형상과 다르므로 쓰지 않는다)
+    # 씌운 자세가 안착 후에도 살아있는지 확인한다. 물리가 되돌려 놓으면
+    # '자세를 바꿔 쟀다'는 말이 거짓이 된다 — 조용히 틀리는 종류라 검증한다.
+    if args.object_yaw_deg is not None:
+        w, x, y, z = (obj_quat[:, 0], obj_quat[:, 1], obj_quat[:, 2], obj_quat[:, 3])
+        yaw_meas = np.degrees(np.arctan2(2*(w*z + x*y), 1 - 2*(y*y + z*z)))
+        # ⚠ 각도를 그냥 평균내면 안 된다. 직육면체는 180도 주기라 +89.9 와 -89.9 가
+        #   같은 자세인데 산술평균은 0 을 준다 — 실제로 yaw=90 에서 이 버그로
+        #   '자세 불일치' 오경보가 났다. env 별로 감김을 고려한 차이를 내고 그걸 평균한다.
+        d = ((yaw_meas - args.object_yaw_deg + 90.0) % 180.0) - 90.0
+        err = float(np.mean(np.abs(d)))
+        if err > 2.0:
+            print(f"           [경고] 자세 불일치: 설정 {args.object_yaw_deg:.1f}deg "
+                  f"에서 평균 {err:.1f}deg 어긋남")
+
     size_used = nominal_mm / 1000.0
     height_measured = float(z_rest.mean()) * 2.0
     if abs(height_measured - size_used[2]) > 0.004:
