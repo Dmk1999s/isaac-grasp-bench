@@ -22,6 +22,11 @@ import numpy as np
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 
+# 판정을 내면 안 되는 셀. PCA 값이 제어 방식이 아니라 상수에서 나오는 경우다.
+# small(26mm): floor_clearance_mm=30 이 물체 높이(26.25mm)보다 커서 손끝이 윗면 위에 선다.
+#              조건을 만족하는 값으로 다시 재면 100.0% 다 — docs/size_sweep.md 참고.
+CONFOUNDED = {"small": "상수 교란"}
+
 CELLS = [
     ("base",    "42×42×42",  "기준"),
     ("elong15", "63×42×42",  "길쭉"),
@@ -70,7 +75,9 @@ def main():
         # 노이즈: PCA 반복 편차와 RL 시드 간 편차 중 큰 쪽 (보수적)
         noise = max(spread(pca), spread(per_seed))
 
-        if abs(diff) <= noise:
+        if key in CONFOUNDED:
+            verdict = f"**판정 불가** ({CONFOUNDED[key]})"
+        elif abs(diff) <= noise:
             verdict = "판단 보류 (편차 이내)"
         elif pca_m >= 99.9 and rl_m >= 99.9:
             verdict = "판단 보류 (양쪽 천장)"
@@ -92,6 +99,13 @@ def main():
           "",
           "> 차이가 노이즈보다 작으면 개선/악화를 주장하지 않는다.",
           "> 양쪽이 모두 100% 에 붙은 셀도 마찬가지다 — 그 조건은 변별력이 없다는 뜻이다.",
+          "",
+          "> ⚠ **26×26×26 셀의 PCA 값은 제어 방식의 성능이 아니다.** 이 표의 PCA 는",
+          "> `floor_clearance_mm=30` 한 조건에서만 잰 것인데, 그 값이 물체 높이(26.25mm)보다",
+          "> 커서 손끝 목표가 물체 윗면 위에 선다 — 그리퍼가 허공에서 닫힌다.",
+          "> 조건을 만족하는 값(`clr < 물체 높이`)으로 다시 재면 **같은 셀이 100.0%** 다.",
+          "> 즉 이 셀의 차이는 '제어 방식'이 아니라 '상수'에 귀속된다(원칙 1 위반).",
+          "> 크기 축을 두 조건으로 나눠 다시 잰 결과는 [size_sweep.md](size_sweep.md) 에 있다.",
           ""]
 
     # 시드별 상세
