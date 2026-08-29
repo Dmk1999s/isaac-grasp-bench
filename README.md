@@ -122,16 +122,24 @@ RG2 로 옆에서 접근하던 워크플로의 상수가 Franka 의 위에서 �
 | 플랜지→손끝 | 228.6 mm | 103.4 mm | `lift/config/franka/joint_pos_env_cfg.py:77` |
 | 그리퍼 최대 개방 | 110 mm | 80 mm | `isaaclab_assets/robots/franka.py:48` |
 
-이식본이 실제로 도는지는 합성 점군으로 검증했다 (`tests/`, 6 케이스 통과).
+이식본이 실제로 도는지는 합성 점군으로 검증했다 (`tests/test_grasp_pca_core.py`, 6 케이스).
+규약 어댑터·합성 점군까지 합치면 `tests/` 전체가 27 케이스다.
 그중 하나는 **상수 교체가 형식적이지 않았음을 보이는 테스트**다 — 폭 90mm 물체는
 RG2(110mm)로는 잡히지만 Franka(80mm)로는 `GraspTooWideError` 가 나야 한다.
 
 ```bash
-python -m pytest tests/ -q      # Isaac Sim 없이 돈다
+source scripts/env.sh && $PY -m pytest tests/ -q     # Isaac Sim 없이 돈다
 ```
 
-**아직 안 된 것**: 원본의 자세 표현은 `ZYZ` 오일러각 — 두산 M0609 규약이다.
-Isaac Sim 은 쿼터니언을 쓰므로 어댑터 계층이 필요하고, 그건 아직 만들지 않았다.
+> `python` 이 아니라 `$PY` 다. 이 인스턴스의 기본 셸 PATH 에는 `python` 이 없어서
+> `python -m pytest` 는 `command not found` 로 죽는다 — `scripts/env.sh` 가 인터프리터를
+> 고정해 주는 것이 그 때문이다.
+
+**규약 어댑터**: 원본의 자세 표현은 `ZYZ` 오일러각(두산 M0609 규약)이고 Isaac Sim 은
+쿼터니언을 쓴다. 단위(mm↔m)와 자세 표현 변환은 `src/isaac_adapter.py` 한 곳에 모았다 —
+휴리스틱 본체를 원본과 동일하게 유지하려면 규약 변환이 본체 밖에 있어야 한다.
+왕복 변환과 **쿼터니언 순서**(Isaac 은 `(w,x,y,z)`, scipy 는 `(x,y,z,w)`)까지
+`tests/test_isaac_adapter.py` 13 케이스로 검증한다.
 
 
 ### 실패 지도 — 같은 알고리즘, 통제된 조건
