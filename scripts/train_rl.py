@@ -126,6 +126,7 @@ import pathlib as _pl, sys as _sys
 _sys.path.insert(0, str(_pl.Path(__file__).resolve().parents[1] / "src"))
 import lift_ik_rel_rl  # noqa: F401,E402
 import lift_dr_env  # noqa: F401,E402  (Phase 3 랜덤화 태스크 등록)
+import lift_duck_env  # noqa: F401,E402  (오리 부위 지정 태스크 등록)
 # ────────────────────────────────────────────────────────────────────
 
 from isaaclab_tasks.utils.hydra import hydra_task_config

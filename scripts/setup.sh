@@ -21,12 +21,30 @@ setup_data_volume() {
     return 0
   fi
 
+  # SKIP_DATA_VOLUME=1: 별도 볼륨 없이 루트 볼륨의 디렉터리로 쓴다.
+  #   루트 EBS 도 stop 시 보존되므로 결과 보존에는 문제가 없다.
+  if [ "${SKIP_DATA_VOLUME:-0}" = "1" ]; then
+    log "SKIP_DATA_VOLUME=1 — $DATA_MNT 를 루트 볼륨 디렉터리로 사용"
+    sudo mkdir -p "$DATA_MNT"
+    sudo chown "$(id -u):$(id -g)" "$DATA_MNT"
+    return 0
+  fi
+
   # 안전장치: 기존 파일시스템이 있으면 포맷하지 않는다
   local existing
   existing="$(sudo blkid -s TYPE -o value "$DATA_DEV" 2>/dev/null || true)"
   if [ -n "$existing" ]; then
     log "$DATA_DEV 에 이미 '$existing' 파일시스템 존재 — 포맷 생략, 마운트만 수행"
   else
+    # 안전장치 2: 파일시스템 서명이 없어도 데이터가 있을 수 있다(암호화·raw 등).
+    #   새 EBS 볼륨은 0 으로 읽힌다. 앞 16MB 에 0 이 아닌 바이트가 있으면 멈춘다.
+    local nonzero
+    nonzero="$(sudo head -c 16777216 "$DATA_DEV" | tr -d '\0' | wc -c)"
+    if [ "$nonzero" -gt 0 ]; then
+      log "ERROR: $DATA_DEV 에 서명 없는 데이터가 있다(${nonzero}B). 포맷하지 않는다."
+      log "       확인 후 직접 포맷하거나 SKIP_DATA_VOLUME=1 로 다시 실행할 것."
+      return 1
+    fi
     log "$DATA_DEV 포맷 (ext4, label=data, reserve 1%)"
     sudo mkfs.ext4 -L data -m 1 "$DATA_DEV"
   fi
@@ -153,6 +171,13 @@ setup_isaaclab() {
               "typing_extensions==4.12.2"
   pip install torchaudio==2.7.0 --index-url https://download.pytorch.org/whl/cu128
 
+  # rsl-rl-lib 3.1.2 는 tensordict 버전을 고정하지 않는다. 2026-10 기준 최신 0.15.x 는
+  # torch>=2.13 을 요구해 `import rsl_rl.runners` 가 ImportError(is_structseq_instance)로 죽는다.
+  # torch 2.7 과 짝인 0.8.3 으로 고정한다. --no-deps: torch 를 끌어올리지 않게.
+  log "tensordict==0.8.3 고정 (torch 2.7 호환)"
+  pip install --no-deps "tensordict==0.8.3"
+  python -c "from rsl_rl.runners import OnPolicyRunner" || { log "ERROR: rsl_rl import 실패"; return 1; }
+
   # 검증: 조용한 실패를 여기서 잡는다.
   if ! pip show isaaclab >/dev/null 2>&1; then
     log "ERROR: 핵심 isaaclab 패키지가 설치되지 않았다."
@@ -199,7 +224,10 @@ smoke_test() {
   log "헤드리스 스모크 학습: $SMOKE_TASK (envs=$SMOKE_ENVS, iters=$SMOKE_ITERS)"
   if python "$ISAACLAB_DIR/scripts/reinforcement_learning/rsl_rl/train.py" \
        --task "$SMOKE_TASK" --headless \
-       --num_envs "$SMOKE_ENVS" --max_iterations "$SMOKE_ITERS" > "$logf" 2>&1; then
+       --num_envs "$SMOKE_ENVS" --max_iterations "$SMOKE_ITERS" > "$logf" 2>&1 \
+     && grep -aq "Learning iteration" "$logf" && ! grep -aq "Traceback" "$logf"; then
+    # train.py 는 import 단계에서 예외가 나도 exit 0 으로 끝난다(2026-10-19 확인).
+    # 그래서 종료 코드가 아니라 학습 iteration 이 실제로 찍혔는지로 판정한다.
     log "스모크 테스트 통과. 로그: $logf"
   else
     log "스모크 테스트 실패(exit=$?). 로그 확인: $logf"

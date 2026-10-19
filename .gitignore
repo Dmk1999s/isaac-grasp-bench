@@ -16,6 +16,7 @@ events.out.tfevents.*
 checkpoints/**
 !checkpoints/**/
 !checkpoints/final/*.pt
+!checkpoints/duck/*.pt
 
 # ── 로그 ──────────────────────────────────────────────────────────────
 logs/
@@ -32,9 +33,12 @@ __pycache__/
 # ── 대용량 에셋 ───────────────────────────────────────────────────────
 *.usd
 *.usda
+# 오리 근사 모형은 예외 — 실험 조건 그 자체라 생성 스크립트와 함께 추적한다 (~190KB)
+!assets/duck/*.usda
 
 # ── Claude Code 세션 파일 ─────────────────────────────────────────────
 .claude/
 
 # hydra 가 실행마다 남기는 설정 중복본. 같은 내용이 runs/**/params/ 에 있다.
 outputs/
+.DS_Store

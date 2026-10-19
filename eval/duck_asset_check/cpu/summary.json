@@ -1,0 +1,203 @@
+{
+  "usd": "/home/ubuntu/isaac-grasp-bench/assets/duck/duck.usda",
+  "device": "cpu",
+  "reference_sphere": {
+    "sphere_radius_mm": 25.0,
+    "sphere_center_z_mm": 25.0,
+    "sphere_lowest_z_mm": 0.0
+  },
+  "mass_expected_kg": 0.06,
+  "friction": [
+    1.0,
+    0.8
+  ],
+  "seconds": 3.0,
+  "results": [
+    {
+      "pose": "prone",
+      "final_pos_m": [
+        0.005400000140070915,
+        0.0015999999595806003,
+        0.023800000548362732
+      ],
+      "lin_speed_mm_s": 0.0,
+      "ang_speed_deg_s": 0.0,
+      "lowest_surface_z_mm": 0.25,
+      "world_up_in_local": [
+        -0.204,
+        -0.098,
+        0.974
+      ],
+      "mass_kg": 0.06,
+      "camera_pixels_by_label": {
+        "head": 800,
+        "body": 1220,
+        "leg": 170
+      },
+      "label_agreement": 1.0,
+      "camera_points_outside_model": 0,
+      "id_to_labels": {
+        "0": "BACKGROUND",
+        "1": "UNLABELLED",
+        "2": "leg",
+        "3": "head",
+        "4": "body"
+      }
+    },
+    {
+      "pose": "on_back",
+      "final_pos_m": [
+        0.3443000018596649,
+        0.0012000000569969416,
+        0.02319999970495701
+      ],
+      "lin_speed_mm_s": 0.0,
+      "ang_speed_deg_s": 0.0,
+      "lowest_surface_z_mm": 0.14,
+      "world_up_in_local": [
+        0.166,
+        0.08,
+        -0.983
+      ],
+      "mass_kg": 0.06,
+      "camera_pixels_by_label": {
+        "head": 830,
+        "body": 1228,
+        "leg": 176
+      },
+      "label_agreement": 1.0,
+      "camera_points_outside_model": 0,
+      "id_to_labels": {
+        "0": "BACKGROUND",
+        "1": "UNLABELLED",
+        "2": "head",
+        "3": "body",
+        "4": "leg"
+      }
+    },
+    {
+      "pose": "left_side",
+      "final_pos_m": [
+        0.7002000212669373,
+        -0.007000000216066837,
+        0.02459999918937683
+      ],
+      "lin_speed_mm_s": 0.0,
+      "ang_speed_deg_s": 0.0,
+      "lowest_surface_z_mm": -0.82,
+      "world_up_in_local": [
+        0.021,
+        0.963,
+        -0.269
+      ],
+      "mass_kg": 0.06,
+      "camera_pixels_by_label": {
+        "head": 726,
+        "body": 1116,
+        "leg": 115
+      },
+      "label_agreement": 1.0,
+      "camera_points_outside_model": 0,
+      "id_to_labels": {
+        "0": "BACKGROUND",
+        "1": "UNLABELLED",
+        "2": "head",
+        "3": "body",
+        "4": "leg"
+      }
+    },
+    {
+      "pose": "right_side",
+      "final_pos_m": [
+        1.0503000020980835,
+        0.007300000172108412,
+        0.02449999935925007
+      ],
+      "lin_speed_mm_s": 0.0,
+      "ang_speed_deg_s": 0.0,
+      "lowest_surface_z_mm": -0.77,
+      "world_up_in_local": [
+        0.023,
+        -0.961,
+        -0.275
+      ],
+      "mass_kg": 0.06,
+      "camera_pixels_by_label": {
+        "head": 725,
+        "body": 1116,
+        "leg": 114
+      },
+      "label_agreement": 1.0,
+      "camera_points_outside_model": 0,
+      "id_to_labels": {
+        "0": "BACKGROUND",
+        "1": "UNLABELLED",
+        "2": "body",
+        "3": "leg",
+        "4": "head"
+      }
+    },
+    {
+      "pose": "beak_down",
+      "final_pos_m": [
+        1.309399962425232,
+        -0.0031999999191612005,
+        0.023800000548362732
+      ],
+      "lin_speed_mm_s": 0.0,
+      "ang_speed_deg_s": 0.0,
+      "lowest_surface_z_mm": 0.26,
+      "world_up_in_local": [
+        -0.204,
+        0.098,
+        0.974
+      ],
+      "mass_kg": 0.06,
+      "camera_pixels_by_label": {
+        "head": 826,
+        "body": 1245,
+        "leg": 165
+      },
+      "label_agreement": 1.0,
+      "camera_points_outside_model": 0,
+      "id_to_labels": {
+        "0": "BACKGROUND",
+        "1": "UNLABELLED",
+        "2": "head",
+        "3": "body",
+        "4": "leg"
+      }
+    },
+    {
+      "pose": "tail_down",
+      "final_pos_m": [
+        1.6943000555038452,
+        0.0005000000237487257,
+        0.02319999970495701
+      ],
+      "lin_speed_mm_s": 0.0,
+      "ang_speed_deg_s": 0.0,
+      "lowest_surface_z_mm": 0.14,
+      "world_up_in_local": [
+        0.166,
+        0.08,
+        -0.983
+      ],
+      "mass_kg": 0.06,
+      "camera_pixels_by_label": {
+        "head": 847,
+        "body": 1252,
+        "leg": 176
+      },
+      "label_agreement": 0.9991,
+      "camera_points_outside_model": 0,
+      "id_to_labels": {
+        "0": "BACKGROUND",
+        "1": "UNLABELLED",
+        "2": "head",
+        "3": "body",
+        "4": "leg"
+      }
+    }
+  ]
+}
