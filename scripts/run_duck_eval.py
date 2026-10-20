@@ -41,6 +41,8 @@ parser.add_argument("--wrong_part", action="store_true",
                     help="대조군: PCA 에 지시와 다른 부위를 넘긴다 (지시·판정은 원래 부위)")
 parser.add_argument("--grasp_offset_m", type=float, default=0.0,
                     help="대조군: 파지 위치를 x 로 어긋나게 준다")
+parser.add_argument("--occlusion", type=float, default=0.0,
+                    help="가림(인식만): 지시 부위의 보이는 점 중 이 비율을 반평면 판으로 숨긴다. PCA·PPO v2 에 같은 판")
 parser.add_argument("--usd", default=None, help="오리 USD (기본: assets/duck/duck.usda)")
 parser.add_argument("--debug_env", type=int, default=-1, help="이 env 의 궤적을 10스텝마다 출력")
 parser.add_argument("--save_debug", action="store_true", help="env0 의 PCA 입력 점군을 npz 로 저장")
@@ -86,7 +88,34 @@ SURFACE, SURFACE_LAB = td.sample_surface(td.VISIBLE_SAMPLES, seed=0)
 PART_FAMILY_NAME = {"head": "head", "body": "body", "leg1": "leg", "leg2": "leg"}
 
 
-def pca_targets(obj_pos, obj_quat, target, seed, debug_path=None):
+def visible_cloud(pos, quat):
+    w, x, y, z = quat
+    world = Rotation.from_quat([x, y, z, w]).apply(SURFACE) + pos
+    return td.visible_from_above(world, SURFACE_LAB)
+
+
+def make_occluders(obj_pos, obj_quat, target, seed, frac):
+    """env 마다 가림판 (u, s) 과 실제로 가려진 지시 부위 비율. 안착 자세 기준, 에피소드 동안 고정."""
+    n = len(obj_pos)
+    U = np.zeros((n, 2))
+    S = np.full(n, np.inf)
+    got = np.zeros(n)
+    CNT = np.zeros((n, 4))
+    for i in range(n):
+        U[i] = td.occluder_direction(seed, i)
+        if frac <= 0:
+            continue
+        vis, lab = visible_cloud(obj_pos[i], obj_quat[i])
+        S[i] = td.occluder_offset(vis, lab, target, frac, U[i])
+        fam = np.array([td.PART_FAMILY.get(k, k) for k in lab])
+        got[i] = td.occluded(vis[fam == target], U[i], S[i]).mean()
+        keep = ~td.occluded(vis, U[i], S[i])
+        for j, key in enumerate(duck_env._VIS_KEYS):
+            CNT[i, j] = int((lab[keep] == key).sum())
+    return U, S, got, CNT
+
+
+def pca_targets(obj_pos, obj_quat, target, seed, debug_path=None, occ=None):
     """보이는 면 점군 + 부위 라벨 → 휴리스틱 → 손끝 목표 자세."""
     n = len(obj_pos)
     pos_out = obj_pos.copy()
@@ -94,9 +123,10 @@ def pca_targets(obj_pos, obj_quat, target, seed, debug_path=None):
     failed = np.zeros(n, dtype=bool)
     reasons = {}
     for i in range(n):
-        w, x, y, z = obj_quat[i]
-        world = Rotation.from_quat([x, y, z, w]).apply(SURFACE) + obj_pos[i]
-        vis, lab = td.visible_from_above(world, SURFACE_LAB)
+        vis, lab = visible_cloud(obj_pos[i], obj_quat[i])
+        if occ is not None:
+            keep = ~td.occluded(vis, occ[0][i], occ[1][i])
+            vis, lab = vis[keep], lab[keep]
         names, counts, chunks = [], [], []
         for key in ("head", "body", "leg1", "leg2"):
             m = lab == key
@@ -105,6 +135,10 @@ def pca_targets(obj_pos, obj_quat, target, seed, debug_path=None):
             names.append(PART_FAMILY_NAME[key])
             counts.append(int(m.sum()))
             chunks.append(vis[m])
+        if not chunks:
+            failed[i] = True
+            reasons["보이는 점 없음"] = reasons.get("보이는 점 없음", 0) + 1
+            continue
         pts_mm = np.concatenate(chunks) * adapter.MM_PER_M
         if debug_path is not None and i == 0:
             np.savez(debug_path, points_mm=pts_mm, names=np.array(names), counts=np.array(counts))
@@ -133,6 +167,7 @@ def run_episode(env, policy, target, pose, seed):
     dev, n = u.device, u.num_envs
     adim = u.action_space.shape[1]
     u.duck_eval = {"target": target, "pose": pose}
+    u.duck_occ_u = None                       # 안착 전에는 가림 없음
     u.seed(seed)
     obs, _ = env.reset()
     _o = u.scene["object"]
@@ -149,6 +184,23 @@ def run_episode(env, policy, target, pose, seed):
 
     settled_pose = torch.cat([obj.data.root_pos_w - origins, obj.data.root_quat_w], -1).cpu().numpy()
     heur_failed = np.zeros(n, dtype=bool)
+    occ = None
+    occ_got = np.zeros(n)
+    if args.occlusion > 0:
+        op0 = (obj.data.root_pos_w - origins).cpu().numpy()
+        oq0 = obj.data.root_quat_w.cpu().numpy()
+        U, S, occ_got, cnt_np = make_occluders(op0, oq0, target, seed, args.occlusion)
+        occ = (U, S)
+        u.duck_occ_u = torch.tensor(U, dtype=torch.float32, device=dev)
+        u.duck_occ_s = torch.tensor(S, dtype=torch.float32, device=dev)
+        if hasattr(u, "duck_vis_cache"):
+            del u.duck_vis_cache                # 가림을 반영해 관측을 다시 계산한다
+        obs = u.observation_manager.compute()
+        # 검증: PPO 가 받는 GPU 가림 점 수 == PCA 가 받는 numpy 가림 점 수
+        cnt_gpu = duck_env.visible_part_stats(u)["count"].cpu().numpy()
+        dmax = np.abs(cnt_gpu - cnt_np).max()
+        print(f"      [가림 검증] 부위별 보이는 점 수 GPU vs numpy 최대 차 {dmax:.0f}점, "
+              f"지시 부위 가림 실제 {occ_got.mean()*100:.1f}%", flush=True)
     if args.controller == "pca":
         op = (obj.data.root_pos_w - origins).cpu().numpy()
         oq = obj.data.root_quat_w.cpu().numpy()
@@ -156,7 +208,7 @@ def run_episode(env, policy, target, pose, seed):
         dbg = None
         if args.save_debug:
             dbg = pathlib.Path(args.out).with_suffix("").as_posix() + f"_{target}_{pose}_{seed}_cloud.npz"
-        gp_np, gq_np, heur_failed = pca_targets(op, oq, pca_part, seed, dbg)
+        gp_np, gq_np, heur_failed = pca_targets(op, oq, pca_part, seed, dbg, occ)
         gp_np[:, 0] += args.grasp_offset_m
         gp = torch.tensor(gp_np, dtype=torch.float32, device=dev)
         gq = torch.tensor(gq_np, dtype=torch.float32, device=dev)
@@ -255,6 +307,8 @@ def run_episode(env, policy, target, pose, seed):
         "finger_gap_mm": (gap_at.cpu().numpy() * 1000).round(2),
         "max_obj_z_mm": (max_z.cpu().numpy() * 1000).round(1),
         "heuristic_failed": heur_failed.astype(int),
+        "occlusion": np.full(n, args.occlusion),
+        "occ_target_frac": occ_got.round(4),
         # 배치 동일성 확인용: 리셋 직후(스폰)와 안착 후 자세. env 좌표, 쿼터니언 wxyz
         **{f"spawn_{k}": spawn_pose[:, i].round(6) for i, k in enumerate(["x", "y", "z", "qw", "qx", "qy", "qz"])},
         **{f"settled_{k}": settled_pose[:, i].round(6) for i, k in enumerate(["x", "y", "z", "qw", "qx", "qy", "qz"])},
@@ -284,6 +338,7 @@ def main():
     label = args.controller + ("+wrong_part" if args.wrong_part else "") + \
         (f"+offset{args.grasp_offset_m}" if args.grasp_offset_m else "")
     print(f"[태스크] {TASK}  [컨트롤러] {label}  [물체] {usd}")
+    print(f"[가림] 지시 부위 보이는 점의 {args.occlusion*100:.0f}% (인식만)")
     print(f"[성공] z>{duck_env.SUCCESS_HEIGHT}m & 지시부위, {duck_env.SUCCESS_HOLD_STEPS}스텝 연속")
 
     rows = []

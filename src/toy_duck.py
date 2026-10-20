@@ -290,3 +290,32 @@ def visible_from_above(points_world, labels, cell_m=VISIBLE_CELL_M):
     first[1:] = key[order][1:] != key[order][:-1]
     keep = order[first]
     return points_world[keep], labels[keep]
+
+
+# ── 가림 (인식만) ─────────────────────────────────────────────
+# 위에서 볼 때 수평 반평면 {p : p_xy · u > s} 를 덮는 불투명 판. 물리 충돌은 없다.
+# s 는 '지시 부위의 보이는 점 중 frac 만큼이 가려지도록' 정한다.
+# 방향 u 는 (평가 시드, env) 로 정해져 PCA·PPO 가 같은 가림을 받고, 가림 수준끼리는 판만 밀려난다(중첩).
+PART_FAMILY = {"head": "head", "beak": "head", "body": "body", "leg1": "leg", "leg2": "leg"}
+
+
+def occluder_direction(seed, env_index):
+    rng = np.random.default_rng([int(seed), int(env_index), 7])
+    phi = rng.uniform(0.0, 2.0 * np.pi)
+    return np.array([np.cos(phi), np.sin(phi)])
+
+
+def occluder_offset(vis_points, vis_labels, target, frac, u):
+    """지시 부위의 보이는 점 중 round(frac·n) 개가 p·u > s 가 되는 s. frac=0 이면 +inf."""
+    fam = np.array([PART_FAMILY.get(k, k) for k in vis_labels])
+    proj = np.sort(vis_points[fam == target, :2] @ u)[::-1]
+    k = int(round(frac * len(proj)))
+    if k <= 0:
+        return np.inf
+    if k >= len(proj):
+        return float(proj[-1]) - 1e-6
+    return float(0.5 * (proj[k - 1] + proj[k]))
+
+
+def occluded(points, u, s):
+    return points[:, :2] @ u > s

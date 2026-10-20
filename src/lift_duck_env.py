@@ -354,7 +354,14 @@ def visible_part_stats(env, object_cfg=SceneEntityCfg("object")):
             + loc[..., 0] * _VIS_GRID + loc[..., 1])
     zmax = torch.full((n * _VIS_GRID * _VIS_GRID,), -1e9, device=env.device)
     zmax = zmax.scatter_reduce(0, flat.reshape(-1), w[..., 2].reshape(-1), reduce="amax")
-    vis = (w[..., 2] >= zmax[flat] - 1e-7).reshape(-1)                  # [N*P]
+    vis = w[..., 2] >= zmax[flat] - 1e-7                                # [N,P]
+    # 가림(인식만): 평가 하네스가 env.duck_occ_u [N,2], env.duck_occ_s [N] 를 넣으면
+    # 수평 반평면 p·u > s 의 점을 숨긴다 (toy_duck.occluded 와 같은 규칙). 학습 중에는 없다.
+    occ_u = getattr(env, "duck_occ_u", None)
+    if occ_u is not None:
+        proj = (w[..., :2] * occ_u.unsqueeze(1)).sum(-1)
+        vis = vis & ~(proj > env.duck_occ_s.unsqueeze(1))
+    vis = vis.reshape(-1)                                                # [N*P]
     # 부위별 누적 합 (index_add) — 점 x 부위 배열을 만들지 않아 메모리·시간이 1/4 수준
     bin_ = (torch.arange(n, device=env.device).unsqueeze(1) * 4 + env.duck_vis_key.unsqueeze(0)).reshape(-1)
     bin_ = bin_[vis]

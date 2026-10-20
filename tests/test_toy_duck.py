@@ -95,3 +95,27 @@ def test_shape_arrays_families():
     c, s, fam = td.shape_arrays()
     assert len(c) == len(s) == len(fam) == 5
     assert [td.TARGETS[f] for f in fam] == ["head", "head", "body", "leg", "leg"]
+
+
+def test_occluder_hides_requested_fraction_of_target():
+    from scipy.spatial.transform import Rotation
+    pts, lab = td.sample_surface(td.VISIBLE_SAMPLES, seed=0)
+    world = Rotation.from_euler("z", 37, degrees=True).apply(pts) + np.array([0.5, 0.0, 0.03])
+    vis, vlab = td.visible_from_above(world, lab)
+    fam = np.array([td.PART_FAMILY.get(k, k) for k in vlab])
+    for target in td.TARGETS:
+        u = td.occluder_direction(1000, 3)
+        prev = 0
+        for frac in (0.0, 0.25, 0.5, 0.75):
+            s = td.occluder_offset(vis, vlab, target, frac, u)
+            hid = td.occluded(vis, u, s)
+            m = fam == target
+            got = hid[m].mean()
+            assert abs(got - frac) <= 1.0 / m.sum() + 1e-9
+            assert hid.sum() >= prev          # 수준이 오를수록 가림이 커진다 (같은 방향)
+            prev = hid.sum()
+
+
+def test_occluder_direction_is_deterministic():
+    assert np.allclose(td.occluder_direction(1000, 5), td.occluder_direction(1000, 5))
+    assert not np.allclose(td.occluder_direction(1000, 5), td.occluder_direction(1001, 5))
