@@ -26,6 +26,8 @@ from isaaclab.app import AppLauncher
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--controller", choices=["pca", "rl"], required=True)
+parser.add_argument("--task_version", choices=["v0", "v2"], default="v0",
+                    help="v2: PPO 관측·보상을 PCA 와 맞춘 태스크. 물리·리셋·판정은 같다 (PCA 결과는 동일해야 한다)")
 parser.add_argument("--checkpoint", default=None)
 parser.add_argument("--targets", default="head,body,leg")
 parser.add_argument("--poses", default="prone,side")
@@ -69,7 +71,7 @@ import toy_duck as td  # noqa: E402
 from isaaclab.utils.math import axis_angle_from_quat, quat_conjugate, quat_mul  # noqa: E402
 from isaaclab_tasks.utils import parse_env_cfg  # noqa: E402
 
-TASK = duck_env.TASK_ID
+TASK = duck_env.TASK_ID_V2 if args.task_version == "v2" else duck_env.TASK_ID
 SETTLE_STEPS = 30
 S_ABOVE, S_APPROACH, S_CLOSE, S_LIFT = 0, 1, 2, 3
 APPROACH_HEIGHT = 0.10
@@ -79,7 +81,8 @@ CLOSE_STEPS = 12
 STATE_TIMEOUT = 60
 IK_REL_SCALE = 0.5
 WRONG = {"head": "body", "body": "head", "leg": "body"}
-SURFACE, SURFACE_LAB = td.sample_surface(12000, seed=0)
+# PPO v2 관측과 같은 생성기 (toy_duck.VISIBLE_*)
+SURFACE, SURFACE_LAB = td.sample_surface(td.VISIBLE_SAMPLES, seed=0)
 PART_FAMILY_NAME = {"head": "head", "body": "body", "leg1": "leg", "leg2": "leg"}
 
 
@@ -132,6 +135,8 @@ def run_episode(env, policy, target, pose, seed):
     u.duck_eval = {"target": target, "pose": pose}
     u.seed(seed)
     obs, _ = env.reset()
+    _o = u.scene["object"]
+    spawn_pose = torch.cat([_o.data.root_pos_w - u.scene.env_origins, _o.data.root_quat_w], -1).cpu().numpy()
 
     hold = torch.zeros((n, adim), device=dev)
     hold[:, -1] = 1.0
@@ -142,6 +147,7 @@ def run_episode(env, policy, target, pose, seed):
     origins = u.scene.env_origins
     finger_ids = robot.find_joints("panda_finger_joint.*")[0]
 
+    settled_pose = torch.cat([obj.data.root_pos_w - origins, obj.data.root_quat_w], -1).cpu().numpy()
     heur_failed = np.zeros(n, dtype=bool)
     if args.controller == "pca":
         op = (obj.data.root_pos_w - origins).cpu().numpy()
@@ -249,6 +255,9 @@ def run_episode(env, policy, target, pose, seed):
         "finger_gap_mm": (gap_at.cpu().numpy() * 1000).round(2),
         "max_obj_z_mm": (max_z.cpu().numpy() * 1000).round(1),
         "heuristic_failed": heur_failed.astype(int),
+        # 배치 동일성 확인용: 리셋 직후(스폰)와 안착 후 자세. env 좌표, 쿼터니언 wxyz
+        **{f"spawn_{k}": spawn_pose[:, i].round(6) for i, k in enumerate(["x", "y", "z", "qw", "qx", "qy", "qz"])},
+        **{f"settled_{k}": settled_pose[:, i].round(6) for i, k in enumerate(["x", "y", "z", "qw", "qx", "qy", "qz"])},
     }
 
 
@@ -290,7 +299,9 @@ def main():
                 cats = {c: int((res["category"] == c).sum()) for c in np.unique(res["category"])}
                 print(f"  {target:4s} {pose:5s} seed={seed} 성공 {rate*100:5.1f}%  {cats}  ({time.time()-t0:.0f}s)")
                 for i in range(args.num_envs):
-                    rows.append({"controller": label, "checkpoint": args.checkpoint or "",
+                    rows.append({"controller": label, "task": args.task_version,
+                             "grasp_depth_mm": args.grasp_depth_mm, "floor_clearance_mm": args.floor_clearance_mm,
+                             "checkpoint": args.checkpoint or "",
                                  "usd": pathlib.Path(usd).name, "target": target, "pose": pose,
                                  "seed": seed, "env": i,
                                  **{k: v[i] for k, v in res.items()}})

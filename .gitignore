@@ -17,6 +17,8 @@ checkpoints/**
 !checkpoints/**/
 !checkpoints/final/*.pt
 !checkpoints/duck/*.pt
+!checkpoints/duck_v2/*.pt
+!checkpoints/duck_v2/params_seed*/params/*.yaml
 
 # ── 로그 ──────────────────────────────────────────────────────────────
 logs/

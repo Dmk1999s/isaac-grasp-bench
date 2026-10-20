@@ -47,6 +47,7 @@ import toy_duck as td  # noqa: E402
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 DUCK_USD = os.environ.get("DUCK_USD", str(ROOT / "assets/duck/duck.usda"))
 TASK_ID = "IsaacGraspBench-Lift-Duck-Franka-IK-Rel-v0"
+TASK_ID_V2 = "IsaacGraspBench-Lift-Duck-Franka-IK-Rel-v2"
 
 POSES = ("prone", "side")
 # 떨어뜨릴 높이. 옆으로 누움은 좌/우(roll ±90°)를 반반 고른다.
@@ -298,4 +299,159 @@ gym.register(
         "env_cfg_entry_point": FrankaDuckLiftEnvCfg,
         "rsl_rl_cfg_entry_point": DuckPPORunnerCfg,
     },
+)
+
+
+# ═════════════════════════════════════════════════════════════
+# v2 — PPO 의 관측·보상을 PCA 와 맞춘 태스크 (2026-10-20)
+#
+# v0 과 달라지는 것 두 가지뿐이다. 물리·리셋·성공 판정은 같다.
+# 1) 관측: 오리의 실제 위치·자세·부위 좌표를 빼고, PCA 가 받는 것과 같은
+#    '위에서 보이는 면' 점군(toy_duck.VISIBLE_*, 같은 표본·같은 격자)에서 계산한 값만 준다.
+#      부위 키(head, body, 더 많이 보이는 leg)별 보이는 점 중심 3 + 보이는 점 수 1  → 12
+#      지시 부위의 수평 장축 (cos2θ, sin2θ)                                  →  2
+#      지시 부위 원-핫                                                       →  3
+#    가려진 다리는 PPO 도 모른다 (점 수 0, 중심 0).
+# 2) 보상: '들기·목표 추종' 보상의 부위 조건을 평가 판정과 같은
+#    손가락 접촉 기준(finger_contact_family)으로 바꾼다.
+#    '다가가기' 보상은 실제 부위 기준점을 쓴다 (보상은 정책이 보지 못하는 정보다).
+# ═════════════════════════════════════════════════════════════
+_VIS_KEYS = ("head", "body", "leg1", "leg2")
+_VIS_GRID = 96          # 96 x 2.5mm = 240mm — 오리(144mm)가 어떤 회전에서도 들어간다
+_VIS_COUNT_SCALE = 300.0
+
+
+def _vis_state(env):
+    if not hasattr(env, "duck_vis_pts"):
+        pts, lab = td.sample_surface(td.VISIBLE_SAMPLES, seed=0)
+        env.duck_vis_pts = torch.tensor(pts, dtype=torch.float32, device=env.device)
+        env.duck_vis_key = torch.tensor([_VIS_KEYS.index(k) for k in lab], dtype=torch.long, device=env.device)
+    return env
+
+
+def visible_part_stats(env, object_cfg=SceneEntityCfg("object")):
+    """보이는 면 통계를 스텝당 한 번 계산해 캐시한다.
+
+    반환 dict: count[N,4], centroid[N,4,3] (env 좌표), sxx/sxy/syy[N,4] (중심 기준 2차 모멘트)
+    toy_duck.visible_from_above 와 같은 규칙: env 좌표에서 floor(x/cell) 격자, 칸마다 가장 높은 점.
+    """
+    _vis_state(env)
+    obj = env.scene[object_cfg.name]
+    # 캐시는 '같은 물체 자세'일 때만 쓴다 (리셋은 스텝 카운터를 올리지 않으므로 카운터로 키를 잡으면 안 된다)
+    key = torch.cat([obj.data.root_pos_w, obj.data.root_quat_w], dim=-1)
+    if hasattr(env, "duck_vis_cache") and torch.equal(env.duck_vis_key_pose, key):
+        return env.duck_vis_cache
+    n = env.num_envs
+    P = env.duck_vis_pts.shape[0]
+    q = obj.data.root_quat_w.unsqueeze(1).expand(n, P, 4).reshape(-1, 4)
+    w = quat_apply(q, env.duck_vis_pts.unsqueeze(0).expand(n, P, 3).reshape(-1, 3)).reshape(n, P, 3)
+    w = w + (obj.data.root_pos_w - env.scene.env_origins).unsqueeze(1)
+    cell = td.VISIBLE_CELL_M
+    ij = torch.floor(w[..., :2] / cell).long()
+    base = torch.floor((obj.data.root_pos_w - env.scene.env_origins)[:, :2] / cell).long() - _VIS_GRID // 2
+    loc = (ij - base.unsqueeze(1)).clamp(0, _VIS_GRID - 1)
+    flat = (torch.arange(n, device=env.device).unsqueeze(1) * _VIS_GRID * _VIS_GRID
+            + loc[..., 0] * _VIS_GRID + loc[..., 1])
+    zmax = torch.full((n * _VIS_GRID * _VIS_GRID,), -1e9, device=env.device)
+    zmax = zmax.scatter_reduce(0, flat.reshape(-1), w[..., 2].reshape(-1), reduce="amax")
+    vis = (w[..., 2] >= zmax[flat] - 1e-7).reshape(-1)                  # [N*P]
+    # 부위별 누적 합 (index_add) — 점 x 부위 배열을 만들지 않아 메모리·시간이 1/4 수준
+    bin_ = (torch.arange(n, device=env.device).unsqueeze(1) * 4 + env.duck_vis_key.unsqueeze(0)).reshape(-1)
+    bin_ = bin_[vis]
+    wv = w.reshape(-1, 3)[vis]
+    x, y = wv[:, 0], wv[:, 1]
+    feats = torch.stack([torch.ones_like(x), x, y, wv[:, 2], x * x, x * y, y * y], dim=-1)
+    acc = torch.zeros(n * 4, 7, device=env.device).index_add_(0, bin_, feats).reshape(n, 4, 7)
+    cnt = acc[..., 0]
+    safe = cnt.clamp(min=1.0)
+    cen = acc[..., 1:4] / safe.unsqueeze(-1)
+    out = {"count": cnt, "centroid": cen,
+           "sxx": acc[..., 4] / safe - cen[..., 0] ** 2,
+           "sxy": acc[..., 5] / safe - cen[..., 0] * cen[..., 1],
+           "syy": acc[..., 6] / safe - cen[..., 1] ** 2}
+    env.duck_vis_cache, env.duck_vis_key_pose = out, key.clone()
+    return out
+
+
+def obs_visible_parts(env):
+    """[head, body, leg] 각각 (보이는 점 중심 xyz, 보이는 점 수/300). leg 는 더 많이 보이는 발."""
+    st = visible_part_stats(env)
+    c, k = st["centroid"], st["count"]
+    leg2 = k[:, 3] > k[:, 2]
+    leg_c = torch.where(leg2.unsqueeze(-1), c[:, 3], c[:, 2])
+    leg_k = torch.where(leg2, k[:, 3], k[:, 2])
+    cs = torch.stack([c[:, 0], c[:, 1], leg_c], dim=1)                    # [N,3,3]
+    ks = torch.stack([k[:, 0], k[:, 1], leg_k], dim=1)                    # [N,3]
+    cs = torch.where((ks > 0).unsqueeze(-1), cs, torch.zeros_like(cs))   # 안 보이면 0
+    return torch.cat([cs.reshape(env.num_envs, 9), ks / _VIS_COUNT_SCALE], dim=-1)
+
+
+def obs_target_axis_onehot(env):
+    """지시 부위의 보이는 점 수평 장축 (cos2θ, sin2θ) + 원-핫 3."""
+    _state(env)
+    st = visible_part_stats(env)
+    k = st["count"]
+    leg2 = k[:, 3] > k[:, 2]
+    key = torch.where(env.duck_target == 2, torch.where(leg2, 3, 2), env.duck_target)  # head0 body1 leg→2/3
+    ar = torch.arange(env.num_envs, device=env.device)
+    sxx, sxy, syy = st["sxx"][ar, key], st["sxy"][ar, key], st["syy"][ar, key]
+    ang2 = torch.atan2(2 * sxy, sxx - syy)                                # 2θ (장축의 방향은 180° 주기)
+    vis = k[ar, key] > 0
+    axis = torch.stack([torch.cos(ang2), torch.sin(ang2)], dim=-1) * vis.unsqueeze(-1).float()
+    onehot = torch.nn.functional.one_hot(env.duck_target, len(td.TARGETS)).float()
+    return torch.cat([axis, onehot], dim=-1)
+
+
+def part_ok_fingers(env):
+    return (finger_contact_family(env) == env.duck_target).float()
+
+
+def rew_lift_part_v2(env, minimal_height, object_cfg=SceneEntityCfg("object")):
+    lifted = env.scene[object_cfg.name].data.root_pos_w[:, 2] > minimal_height
+    return lifted.float() * part_ok_fingers(env)
+
+
+def rew_goal_part_v2(env, std, minimal_height, command_name, robot_cfg=SceneEntityCfg("robot"),
+                     object_cfg=SceneEntityCfg("object")):
+    robot = env.scene[robot_cfg.name]
+    obj = env.scene[object_cfg.name]
+    cmd = env.command_manager.get_command(command_name)
+    des_w = quat_apply(robot.data.root_quat_w, cmd[:, :3]) + robot.data.root_pos_w
+    d = torch.linalg.norm(des_w - obj.data.root_pos_w, dim=1)
+    lifted = obj.data.root_pos_w[:, 2] > minimal_height
+    return lifted.float() * part_ok_fingers(env) * (1 - torch.tanh(d / std))
+
+
+@configclass
+class FrankaDuckLiftEnvCfgV2(FrankaDuckLiftEnvCfg):
+    def __post_init__(self):
+        super().__post_init__()
+        pol = self.observations.policy
+        pol.object_position = None          # 실제 물체 위치 — PCA 는 모른다
+        pol.object_quat = None              # 실제 물체 자세 — PCA 는 모른다
+        pol.target_part = None              # 실제 부위 좌표 — PCA 는 모른다
+        pol.visible_parts = ObsTerm(func=obs_visible_parts)
+        pol.target_axis = ObsTerm(func=obs_target_axis_onehot)
+        self.rewards.lifting_object = RewTerm(
+            func=rew_lift_part_v2, params={"minimal_height": LIFT_HEIGHT_REWARD}, weight=15.0)
+        self.rewards.object_goal_tracking = RewTerm(
+            func=rew_goal_part_v2,
+            params={"std": 0.3, "minimal_height": LIFT_HEIGHT_REWARD, "command_name": "object_pose"},
+            weight=16.0)
+        self.rewards.object_goal_tracking_fine_grained = RewTerm(
+            func=rew_goal_part_v2,
+            params={"std": 0.05, "minimal_height": LIFT_HEIGHT_REWARD, "command_name": "object_pose"},
+            weight=5.0)
+
+
+@configclass
+class DuckPPORunnerCfgV2(LiftCubePPORunnerCfg):
+    experiment_name = "franka_lift_duck_v2"   # 하이퍼파라미터는 큐브와 동일
+
+
+gym.register(
+    id=TASK_ID_V2,
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={"env_cfg_entry_point": FrankaDuckLiftEnvCfgV2, "rsl_rl_cfg_entry_point": DuckPPORunnerCfgV2},
 )

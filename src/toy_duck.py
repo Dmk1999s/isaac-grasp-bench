@@ -273,7 +273,12 @@ def anchor_points(scale=DUCK_SCALE):
             "leg": np.stack([sh[("leg1", "foot")], sh[("leg2", "foot")]])}
 
 
-def visible_from_above(points_world, labels, cell_m=0.0025):
+# PCA 입력 점군과 PPO(v2) 관측이 같은 생성기를 쓰도록 한곳에 둔다.
+VISIBLE_SAMPLES = 6000      # 표면 표본 수 (seed=0 고정)
+VISIBLE_CELL_M = 0.0025     # 위에서 본 z-버퍼 격자
+
+
+def visible_from_above(points_world, labels, cell_m=VISIBLE_CELL_M):
     """위에서 내려다볼 때 보이는 점만 남긴다 (xy 격자 z-버퍼).
 
     격자 칸마다 가장 높은 점 하나를 남긴다. 자기 가림(머리가 몸통을 가리는 등)이 반영된다.
